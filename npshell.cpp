@@ -14,13 +14,16 @@
 using namespace std;
 
 struct Command {
-    string exec_command;
+    vector<string> exec_command;
     bool is_error_pipe = false;
     // -1: no pipe after this command; 0:oridinary pipe; >0: number of commands need to be jumped
     int pipe_number;
     pair<int, int> input_pipe;
     pair<int, int> output_pipe;
     pair<int, int> error_pipe;
+
+    bool file_redirection = false;
+    string filename;
 };
 
 struct Job {
@@ -89,7 +92,7 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
     queue<Command> command_queue;
     Job job;
     Command command;
-    string exec_command = "";
+    vector<string> exec_command;
     stringstream ss(str);
     string token;
     while (getline(ss, token, delimiter)) {
@@ -105,13 +108,11 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
 
         }
         // pipe or numbered pipe
-        else if (token[0] == '|' || token[0] == '!') {
+        else if (token[0] == '|' || (token[0] == '!' && token.length() > 1)) {
             // oridinary pipe = 0
             if (token == "|") {
 
                 command.pipe_number = 0;
-                command.exec_command = exec_command;
-                exec_command = "";
                 command_queue.push(command);
                 command = Command();
             }
@@ -120,8 +121,6 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
 
                 const char *t = token.c_str();
                 command.pipe_number = atoi(t + 1);
-                command.exec_command = exec_command;
-                exec_command = "";
                 command_queue.push(command);
                 command = Command();
                 job_id++;
@@ -133,12 +132,10 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
 
             }
             // error pipe
-            else if (token[0] == '|' || token[0] == '!') {
+            else if (token[0] == '!') {
 
                 const char *t = token.c_str();
                 command.pipe_number = atoi(t + 1);
-                command.exec_command = exec_command;
-                exec_command = "";
                 command.is_error_pipe = true;
                 command_queue.push(command);
                 command = Command();
@@ -151,14 +148,18 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
                 job = Job();
             }
         }
+        // get filename
+        else if (command.file_redirection) {
+            command.filename = token;
+        }
+        // file redirection
+        else if (token == ">") {
+            command.file_redirection = true;
+        }
         // other commands
         else {
-            if (exec_command.length() != 0) {
-                exec_command += " " + token;
+            command.exec_command.push_back(token);
 
-            } else {
-                exec_command = token;
-            }
         }
     }
 
@@ -169,10 +170,8 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
         job = Job();
     }
     // last command
-    else if (exec_command != "") {
+    else if (command.exec_command.size() != 0) {
         command.pipe_number = -1; // no pipe
-        command.exec_command = exec_command;
-        exec_command = "";
         command_queue.push(command);
         command = Command();
         job_id++;
@@ -191,7 +190,10 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
     //     ;
     //     while (!c_job.command_queue.empty()) {
     //         Command c_command = c_job.command_queue.front();
-    //         cout << "exec command = " << c_command.exec_command;
+    //         cout<<"exec command= ";
+    //         for(int i=0; i<c_command.exec_command.size();i++)
+    //             cout<<c_command.exec_command[i]<<" ";
+            
     //         cout << " ; pipe number = " << c_command.pipe_number << endl;
     //         c_job.command_queue.pop();
     //     }
@@ -199,41 +201,21 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
 
     // }
     return job_id;
-    // return result;
 }
 
-vector<string> preprocess(const string &str, const char &delimiter, bool &redirection, string &filename) {
-    vector<string> result;
-    stringstream ss(str);
-    string tok;
-    bool flag = false;
-    while (getline(ss, tok, delimiter)) {
-        if (flag == true) {
-            filename = tok;
-            flag = false;
-        } else if (tok == ">") {
-            redirection = true;
-            flag = true;
-        } else {
-
-            result.push_back(tok);
-        }
-    }
-
-    return result;
-}
 
 char **to_char_array(vector<string> input) {
     char **args;
     args = new char *[input.size() + 1];
     for (int i = 0; i < input.size(); i++) {
-        if (i == 0) {
-            // args[i] = strdup(("bin/"+input[i]).c_str());
-            args[i] = strdup((input[i]).c_str());
+        args[i] = strdup((input[i]).c_str());
+        
+        // if (i == 0) {
+        //     args[i] = strdup((input[i]).c_str());
 
-        } else {
-            args[i] = strdup((input[i]).c_str());
-        }
+        // } else {
+        //     args[i] = strdup((input[i]).c_str());
+        // }
     }
     args[input.size()] = NULL;
     return args;
@@ -277,12 +259,13 @@ void execute(Command command, map<int, pair<int, int>> &numbered_pipe_map) {
         // exec
         bool redireciton = false;
         string file_name = "";
-        vector<string> token = preprocess(command.exec_command, ' ', redireciton, file_name);
 
-        char **args = to_char_array(token);
-        if (redireciton) {
-            freopen(file_name.c_str(), "w", stdout);
+        char **args = to_char_array(command.exec_command);
+
+        if (command.file_redirection) {
+            freopen(command.filename.c_str(), "w", stdout);
         }
+
         // string command(args[0]);
         if (execvp(args[0], args) == -1) {
             cerr << "Unknown command: [" << args[0] << "]." << endl;
@@ -295,18 +278,15 @@ void execute(Command command, map<int, pair<int, int>> &numbered_pipe_map) {
         //  if there is a input pipe, deallocate the file descriptor
         if (command.input_pipe.first != 0) {
             close_pipe(command.input_pipe);
-            // wait(NULL);
         }
 
         // if there is any pipe (including ordinary pipe and numbered pipe) after the command, don't wait
         if (command.pipe_number >= 0) {
             signal(SIGCHLD, SIG_IGN);
-            // wait(NULL);
 
         } else {
             wait(NULL);
         }
-        // wait(NULL);
     }
     return;
 }
@@ -358,21 +338,16 @@ int main() {
                 // numbered pipe
                 else if (c_command.pipe_number > 0) {
                     c_command.output_pipe = create_numbered_pipe(c_job.job_id + c_command.pipe_number, numbered_pipe_map);
-                    // cout << "new numbered pipe" << c_command.output_pipe.first << " " << c_command.output_pipe.second << endl;
                 }
 
                 // if there exists numbered piped which send data to this command
                 if (numbered_pipe_map.find(c_job.job_id) != numbered_pipe_map.end()) {
-                    // cout << "someone send data!!!!!!!!!!!!!" << endl;
-                    // cout << "map data" << endl;
                     for (map<int, pair<int, int>>::const_iterator it = numbered_pipe_map.begin();
                          it != numbered_pipe_map.end(); ++it) {
-                        // std::cout <<"job_id: "<< it->first << "pipe value: " << it->second.first << " " << it->second.second << "\n";
                     }
 
                     c_command.input_pipe = numbered_pipe_map[c_job.job_id];
                     numbered_pipe_map.erase(c_job.job_id);
-                    // cout << "check input pipe: " << c_command.input_pipe.first << " " << c_command.input_pipe.second << endl;
                 }
 
                 // if no pipe after this command, execute directly
