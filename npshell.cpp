@@ -211,8 +211,7 @@ vector<string> preprocess(const string &str, const char &delimiter, bool &redire
         if (flag == true) {
             filename = tok;
             flag = false;
-        }
-        else if (tok == ">") {
+        } else if (tok == ">") {
             redirection = true;
             flag = true;
         } else {
@@ -279,10 +278,10 @@ void execute(Command command, map<int, pair<int, int>> &numbered_pipe_map) {
         bool redireciton = false;
         string file_name = "";
         vector<string> token = preprocess(command.exec_command, ' ', redireciton, file_name);
-        
+
         char **args = to_char_array(token);
-        if(redireciton){
-            freopen(file_name.c_str(),"w", stdout);
+        if (redireciton) {
+            freopen(file_name.c_str(), "w", stdout);
         }
         // string command(args[0]);
         if (execvp(args[0], args) == -1) {
@@ -342,9 +341,11 @@ int main() {
             while (!c_job.command_queue.empty()) {
                 Command c_command = c_job.command_queue.front();
                 c_job.command_queue.pop();
+                // cout << "current execute command: " << c_command.exec_command << endl;
 
                 // oridinary pipe after this command
                 if (c_command.pipe_number == 0) {
+
                     // read next command
                     Command *n_command = &c_job.command_queue.front();
 
@@ -357,11 +358,21 @@ int main() {
                 // numbered pipe
                 else if (c_command.pipe_number > 0) {
                     c_command.output_pipe = create_numbered_pipe(c_job.job_id + c_command.pipe_number, numbered_pipe_map);
+                    // cout << "new numbered pipe" << c_command.output_pipe.first << " " << c_command.output_pipe.second << endl;
                 }
 
                 // if there exists numbered piped which send data to this command
                 if (numbered_pipe_map.find(c_job.job_id) != numbered_pipe_map.end()) {
+                    // cout << "someone send data!!!!!!!!!!!!!" << endl;
+                    // cout << "map data" << endl;
+                    for (map<int, pair<int, int>>::const_iterator it = numbered_pipe_map.begin();
+                         it != numbered_pipe_map.end(); ++it) {
+                        // std::cout <<"job_id: "<< it->first << "pipe value: " << it->second.first << " " << it->second.second << "\n";
+                    }
+
                     c_command.input_pipe = numbered_pipe_map[c_job.job_id];
+                    numbered_pipe_map.erase(c_job.job_id);
+                    // cout << "check input pipe: " << c_command.input_pipe.first << " " << c_command.input_pipe.second << endl;
                 }
 
                 // if no pipe after this command, execute directly
