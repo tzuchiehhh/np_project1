@@ -1,10 +1,14 @@
+#include <csignal>
 #include <iostream>
 #include <queue>
 #include <sstream>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <unistd.h>
+#include <utility>
 #include <vector>
+#include <wait.h>
 using namespace std;
 
 struct Command {
@@ -15,6 +19,9 @@ struct Command {
     pair<int, int> input_pipe;
     pair<int, int> output_pipe;
     pair<int, int> error_pipe;
+    // int input_pipe[2];
+    // int output_pipe[2];
+    // int error_pipe[2];
 };
 
 struct Job {
@@ -23,6 +30,34 @@ struct Job {
     vector<string> built_in_command;
     queue<Command> command_queue;
 };
+
+pair<int, int> create_pipe() {
+    // pipefd[0]: read, pipefd[1]: write
+    // create pipe
+    int pipefd[2];
+    int create_pipe = pipe(pipefd);
+    // create pipe failed
+    while (create_pipe < 0) {
+        create_pipe = pipe(pipefd);
+    }
+
+    pair<int, int> temp;
+    temp.first = pipefd[0];
+    temp.second = pipefd[1];
+    return temp;
+}
+
+void open_pipe(int in, int out) {
+    dup2(in, STDIN_FILENO);
+    dup2(out, STDOUT_FILENO);
+    return;
+}
+
+void close_pipe(pair<int, int> p) {
+    close(p.first);
+    close(p.second);
+    return;
+}
 
 void handle_built_in_command(vector<string> tokens) {
     // Terminate npshell
@@ -51,7 +86,7 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
         // built-in command arguments
         if (job.is_built_in_command) {
             job.built_in_command.push_back(token);
-        } 
+        }
         // First built-in command
         else if (token == "setenv" || token == "printenv" || token == "exit") {
             job.is_built_in_command = true;
@@ -104,7 +139,7 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
                 job_queue.push(job);
                 job = Job();
             }
-        } 
+        }
         // other commands
         else {
             if (exec_command.length() != 0) {
@@ -156,6 +191,104 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
     // return result;
 }
 
+vector<string> split(const string &str, const char &delimiter) {
+    vector<string> result;
+    stringstream ss(str);
+    string tok;
+
+    while (getline(ss, tok, delimiter)) {
+        result.push_back(tok);
+    }
+
+    return result;
+}
+
+char **to_char_array(vector<string> input) {
+    char **args;
+    args = new char *[input.size() + 1];
+    for (int i = 0; i < input.size(); i++) {
+        if (i == 0) {
+            // args[i] = strdup(("bin/"+input[i]).c_str());
+            args[i] = strdup((input[i]).c_str());
+
+        } else {
+            args[i] = strdup((input[i]).c_str());
+        }
+    }
+    args[input.size()] = NULL;
+    return args;
+}
+
+void execute(Command command) {
+
+    // fork process
+    pid_t pid;
+    while (1) {
+        pid = fork();
+        if (pid >= 0) {
+            break;
+        }
+    }
+
+    // child process
+    if (pid == 0) {
+        // close other numbered pipes which will be not used in this child process ???
+
+        // first command
+        if (command.input_pipe.first == 0) {
+
+            if (command.is_error_pipe) {
+                dup2(command.output_pipe.second, STDERR_FILENO);
+            }
+            dup2(command.output_pipe.second, STDOUT_FILENO);
+            close_pipe(command.output_pipe);
+        }
+        // last command (no pipe after this command)
+        else if (command.pipe_number == -1) {
+            dup2(command.input_pipe.first, STDIN_FILENO);
+            close_pipe(command.input_pipe);
+        } else if (command.is_error_pipe) {
+            dup2(command.output_pipe.second, STDERR_FILENO);
+            open_pipe(command.input_pipe.first, command.output_pipe.second);
+            close_pipe(command.output_pipe);
+            close_pipe(command.input_pipe);
+        } else {
+            open_pipe(command.input_pipe.first, command.output_pipe.second);
+            close_pipe(command.output_pipe);
+            close_pipe(command.input_pipe);
+        }
+        // exec
+        // string c_exec = command.exec_command;
+        vector<string> token = split(command.exec_command, ' ');
+        char **args = to_char_array(token);
+        // string command(args[0]);
+        if (execvp(args[0], args) == -1) {
+            cerr << "Unknown command: [" << args[0] << "]." << endl;
+            exit(0);
+        }
+
+    }
+    // parent process
+    else {
+        //  if there is a input pipe, deallocate the file descriptor
+        if (command.input_pipe.first != 0) {
+            close_pipe(command.input_pipe);
+            // wait(NULL);
+        }
+
+        // if there is any pipe (including ordinary pipe and numbered pipe) after the command, don't wait
+        if (command.pipe_number >= 0) {
+            signal(SIGCHLD, SIG_IGN);
+            // wait(NULL);
+
+        } else {
+            wait(NULL);
+        }
+        // wait(NULL);
+    }
+    return;
+}
+
 int main() {
 
     // set initial environment variable
@@ -175,6 +308,7 @@ int main() {
         char delimiter = ' ';
         queue<Job> job_queue;
         job_id = parse(job_queue, user_input, delimiter, job_id);
+        cout<<"total job size: "<< job_queue.size()<<endl;
         while (!job_queue.empty()) {
             Job c_job = job_queue.front();
             cout << "job id = " << c_job.job_id << endl;
@@ -183,11 +317,44 @@ int main() {
                 job_queue.pop();
                 continue;
             }
+            cout << "command queue size: " << c_job.command_queue.size() << endl;
             while (!c_job.command_queue.empty()) {
                 Command c_command = c_job.command_queue.front();
-                cout << "exec command = " << c_command.exec_command;
-                cout << " ; pipe number = " << c_command.pipe_number << endl;
                 c_job.command_queue.pop();
+
+                // oridinary pipe after this command
+                if (c_command.pipe_number == 0) {
+                    // read next command
+                    // Command n_command = c_job.command_queue.front();
+                    Command *n_command = &c_job.command_queue.front();
+
+                    // cout<<"before create pipe: "<<endl;
+                    // cout<<"  current input pipe: "<<c_command.input_pipe.first<<" "<<c_command.input_pipe.second<<endl;
+                    // cout<<"  current output pipe: "<<c_command.output_pipe.first<<" "<<c_command.output_pipe.second<<endl<<endl;
+                    // Command test_command = c_job.command_queue.front();
+                    // cout<<"  next input pipe: "<<test_command.input_pipe.first<<" "<<test_command.input_pipe.second<<endl;
+
+                    // create pipe and assign it to current command output pipe
+                    c_command.output_pipe = create_pipe();
+
+                    // cout<<"After create pipe: "<<endl;
+                    // cout<<"  current input pipe: "<<c_command.input_pipe.first<<" "<<c_command.input_pipe.second<<endl;
+                    // cout<<"  current output pipe: "<<c_command.output_pipe.first<<" "<<c_command.output_pipe.second<<endl<<endl;
+
+                    // assign current command output pipe to next command input pipe
+                    n_command->input_pipe = c_command.output_pipe;
+
+                    // Command test_command2 = c_job.command_queue.front();
+                    // cout<<"  next input pipe: "<<test_command2.input_pipe.first<<" "<<test_command2.input_pipe.second<<endl;
+
+                    cout << "execute command: " << c_command.exec_command << endl;
+                    execute(c_command);
+                }
+                // no pipe after this command
+                else if(c_command.pipe_number == -1){
+                    execute(c_command);
+
+                }
             }
 
             job_queue.pop();
