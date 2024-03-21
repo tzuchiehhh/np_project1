@@ -202,13 +202,23 @@ int parse(queue<Job> &job_queue, const string &str, const char &delimiter, int j
     // return result;
 }
 
-vector<string> split(const string &str, const char &delimiter) {
+vector<string> preprocess(const string &str, const char &delimiter, bool &redirection, string &filename) {
     vector<string> result;
     stringstream ss(str);
     string tok;
-
+    bool flag = false;
     while (getline(ss, tok, delimiter)) {
-        result.push_back(tok);
+        if (flag == true) {
+            filename = tok;
+            flag = false;
+        }
+        else if (tok == ">") {
+            redirection = true;
+            flag = true;
+        } else {
+
+            result.push_back(tok);
+        }
     }
 
     return result;
@@ -266,8 +276,14 @@ void execute(Command command, map<int, pair<int, int>> &numbered_pipe_map) {
         }
 
         // exec
-        vector<string> token = split(command.exec_command, ' ');
+        bool redireciton = false;
+        string file_name = "";
+        vector<string> token = preprocess(command.exec_command, ' ', redireciton, file_name);
+        
         char **args = to_char_array(token);
+        if(redireciton){
+            freopen(file_name.c_str(),"w", stdout);
+        }
         // string command(args[0]);
         if (execvp(args[0], args) == -1) {
             cerr << "Unknown command: [" << args[0] << "]." << endl;
